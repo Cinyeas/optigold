@@ -86,6 +86,7 @@ class MarketHeader extends StatelessWidget {
                   value: snapshot.rsi14!.toStringAsFixed(1),
                   color: AppColors.textSecondary,
                 ),
+              _SessionChip(session: snapshot.marketSession, capturedAt: snapshot.capturedAt),
             ],
           ),
         ],
@@ -147,5 +148,63 @@ class _MetricChip extends StatelessWidget {
         style: AppTypography.chipLabel.copyWith(color: color),
       ),
     );
+  }
+}
+
+class _SessionChip extends StatelessWidget {
+  final String? session;
+  final DateTime capturedAt;
+  const _SessionChip({required this.session, required this.capturedAt});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = (session ?? '').toLowerCase();
+    final bool isOpen = s == 'open' || s == 'market_open';
+    final bool isExt  = s == 'pre_market' || s == 'after_hours' || s == 'extended_hours';
+
+    final Color color;
+    final String label;
+    if (isOpen) {
+      color = AppColors.profit;
+      label = 'Market Open';
+    } else if (isExt) {
+      color = AppColors.goldSoft;
+      label = s == 'pre_market' ? 'Pre-Market' : 'After-Hours';
+    } else {
+      color = AppColors.textMuted;
+      label = 'Market Closed';
+    }
+
+    // When not live, append local time of last data capture
+    final String? timeNote = isOpen ? null : _fmtLocal(capturedAt);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(isOpen ? 0.4 : 0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isOpen) ...[
+            PulsingDot(color: color, size: 6),
+            const SizedBox(width: 6),
+          ],
+          Text(
+            timeNote != null ? '$label · $timeNote' : label,
+            style: AppTypography.chipLabel.copyWith(color: color),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _fmtLocal(DateTime utc) {
+    final local = utc.toLocal();
+    final h = local.hour.toString().padLeft(2, '0');
+    final m = local.minute.toString().padLeft(2, '0');
+    return '$h:$m';
   }
 }

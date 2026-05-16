@@ -5,7 +5,7 @@ import 'api_provider.dart';
 class PositionsNotifier extends AutoDisposeAsyncNotifier<List<PositionModel>> {
   @override
   Future<List<PositionModel>> build() async {
-    final client = await ref.watch(apiClientProvider.future);
+    final client = ref.watch(apiClientProvider);
     return client.listPositions();
   }
 
@@ -19,8 +19,8 @@ class PositionsNotifier extends AutoDisposeAsyncNotifier<List<PositionModel>> {
     int? quantity,
     double? entryPrice,
   }) async {
-    final client = await ref.read(apiClientProvider.future);
-    await client.createPosition({
+    final client = ref.read(apiClientProvider);
+    final newPosition = await client.createPosition({
       'signal_id':   signalId,
       'instrument':  instrument,
       'strategy':    strategy,
@@ -30,19 +30,33 @@ class PositionsNotifier extends AutoDisposeAsyncNotifier<List<PositionModel>> {
       if (quantity   != null) 'quantity':    quantity,
       if (entryPrice != null) 'entry_price': entryPrice,
     });
-    ref.invalidateSelf();
+    // Update state directly — no loading flash
+    final current = state.valueOrNull ?? [];
+    state = AsyncData([...current, newPosition]);
+  }
+
+  Future<void> edit(int id, Map<String, dynamic> data) async {
+    final client = ref.read(apiClientProvider);
+    final updated = await client.updatePosition(id, data);
+    final current = state.valueOrNull ?? [];
+    state = AsyncData(current.map((p) => p.id == id ? updated : p).toList());
   }
 
   Future<void> close(int id, double closePrice, {String? closeReason, String? notes}) async {
-    final client = await ref.read(apiClientProvider.future);
-    await client.closePosition(id, closePrice, closeReason: closeReason, notes: notes);
-    ref.invalidateSelf();
+    final client = ref.read(apiClientProvider);
+    final updated = await client.closePosition(id, closePrice,
+        closeReason: closeReason, notes: notes);
+    // Replace the updated position in-place — no loading flash
+    final current = state.valueOrNull ?? [];
+    state = AsyncData(current.map((p) => p.id == id ? updated : p).toList());
   }
 
   Future<void> delete(int id) async {
-    final client = await ref.read(apiClientProvider.future);
+    final client = ref.read(apiClientProvider);
     await client.deletePosition(id);
-    ref.invalidateSelf();
+    // Remove deleted position in-place — no loading flash
+    final current = state.valueOrNull ?? [];
+    state = AsyncData(current.where((p) => p.id != id).toList());
   }
 }
 

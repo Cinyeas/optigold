@@ -100,18 +100,34 @@ def detect_regime(snapshot: dict[str, Any]) -> MarketRegime:
     # ── Composite regime classification ───────────────────────────────────────
     confidence_parts: list[float] = []
 
-    if vol_signal == "low" and trend_signal == "up" and adx_signal in ("moderate", "strong"):
+    # ── Priority 1: Strong directional trend (ADX strong regardless of vol) ──────
+    # A confirmed strong trend (ADX≥30 + EMA stack aligned) overrides vol-based
+    # classification. Without this, high_vol_trend_down fires first and
+    # strong_trend_down becomes structurally unreachable in real markets.
+    if adx_signal == "strong" and trend_signal == "up":
+        regime = "strong_trend_up"
+        bias = "bullish"
+        confidence_parts = [0.75, 0.05 if vol_signal == "high" else 0.0]
+    elif adx_signal == "strong" and trend_signal == "down":
+        regime = "strong_trend_down"
+        bias = "bearish"
+        confidence_parts = [0.75, 0.05 if vol_signal == "high" else 0.0]
+
+    # ── Priority 2: Low-vol trend (ADX moderate or strong, vol quiet) ──────────
+    elif vol_signal == "low" and trend_signal == "up" and adx_signal in ("moderate", "strong"):
         regime = "low_vol_trend_up"
         bias = "bullish"
-        confidence_parts = [0.7, 0.1 if adx_signal == "strong" else 0.0]
+        confidence_parts = [0.70]
     elif vol_signal == "low" and trend_signal == "down" and adx_signal in ("moderate", "strong"):
         regime = "low_vol_trend_down"
         bias = "bearish"
-        confidence_parts = [0.65, 0.1 if adx_signal == "strong" else 0.0]
+        confidence_parts = [0.65]
     elif vol_signal == "low" and adx_signal == "weak":
         regime = "low_vol_range"
         bias = "neutral"
         confidence_parts = [0.70]
+
+    # ── Priority 3: High-vol (vol signal dominates when trend is not strong) ───
     elif vol_signal == "high" and adx_signal in ("moderate", "strong") and trend_signal == "up":
         regime = "high_vol_trend_up"
         bias = "bullish"
@@ -124,14 +140,8 @@ def detect_regime(snapshot: dict[str, Any]) -> MarketRegime:
         regime = "high_vol_range"
         bias = "neutral"
         confidence_parts = [0.65]
-    elif trend_signal == "up" and adx_signal == "strong":
-        regime = "strong_trend_up"
-        bias = "bullish"
-        confidence_parts = [0.75]
-    elif trend_signal == "down" and adx_signal == "strong":
-        regime = "strong_trend_down"
-        bias = "bearish"
-        confidence_parts = [0.75]
+
+    # ── Priority 4: Default ────────────────────────────────────────────────────
     else:
         regime = "choppy"
         bias = "neutral"

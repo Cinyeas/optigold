@@ -1,8 +1,8 @@
 class AppConstants {
   AppConstants._();
 
-  // Android emulator: use 10.0.2.2 to reach host machine; iOS sim: localhost
-  static const String defaultBaseUrl = 'http://10.0.2.2:8000';
+  // Android emulator: 10.0.2.2 | iOS real device: Mac LAN IP
+  static const String defaultBaseUrl = 'http://192.168.0.10:8000';
   static const String baseUrlKey     = 'api_base_url';
   static const String onboardedKey   = 'onboarding_complete';
 

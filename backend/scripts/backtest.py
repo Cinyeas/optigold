@@ -84,8 +84,15 @@ PROFILES = {
         "accepts_options": True,
         "accepts_margin": False,
         "accepts_unlimited_risk": False,
-        "accepts_multi_leg": False,
+        "accepts_multi_leg": True,   # allow vertical spreads (defined-risk, bounded)
         "risk_multiplier": 0.5,
+        # Lower delta → more OTM strikes → cheaper options
+        "delta_target_otm": 0.15,
+        # Narrow spread width so max_loss stays within $300 limit.
+        # At GLD≈$460, spot*0.02 ≈ $9.2 → max_loss ≈ $860.
+        # $2 width → net credit ~$31, cost $8 → margin too thin (net P&L negative).
+        # $3 width → net credit ~$45, max_loss ~$255 (still < $300), cost same → viable.
+        "spread_width": 3.0,
     },
     "intermediate": {
         "capital": 50_000,
@@ -97,6 +104,8 @@ PROFILES = {
         "accepts_unlimited_risk": False,
         "accepts_multi_leg": True,
         "risk_multiplier": 0.75,
+        "delta_target_otm": 0.30,
+        "spread_width": None,   # use default: spot × 0.02
     },
     "advanced": {
         "capital": 200_000,
@@ -108,6 +117,8 @@ PROFILES = {
         "accepts_unlimited_risk": True,
         "accepts_multi_leg": True,
         "risk_multiplier": 1.0,
+        "delta_target_otm": 0.30,
+        "spread_width": None,   # use default: spot × 0.02
     },
 }
 
@@ -206,7 +217,11 @@ STRATEGY_LEGS = {
     "long_straddle": 2,
 }
 COMMISSION_PER_CONTRACT = 1.0   # $1/contract (Tastytrade standard)
-SLIPPAGE_PCT = 0.03             # 3% of premium (bid-ask mid-price offset)
+SLIPPAGE_PCT = 0.03             # 3% of premium as baseline (bid-ask mid-price offset)
+# Per-leg slippage floor: GLD options typical bid-ask impact is $2-5/contract per leg.
+# 3% of net credit for cheap spreads ($31) gives only $0.93 — far below actual.
+# Floor of $2/leg captures real-world fill cost even for cheap multi-leg structures.
+SLIPPAGE_PER_LEG_FLOOR = 2.0   # $2 per leg (round-trip slippage floor)
 
 
 def _credit_strategy_pnl(
@@ -234,27 +249,36 @@ def _credit_strategy_pnl(
         exit_val = bs_price(spot_exit, strike_a, T_exit, r, iv_exit, "put")
         return round((entry_val - exit_val) * 100, 2)  # per contract (×100)
 
-    elif strategy in ("bull_put_spread", "covered_call"):
-        # Sell lower-strike put, buy even-lower put (width = strike_a - strike_b)
-        # We model as cash_secured_put approximation for simplicity
-        entry_val = bs_price(spot_entry, strike_a, T_entry, r, iv_entry, "put")
-        exit_val = bs_price(spot_exit, strike_a, T_exit, r, iv_exit, "put")
-        return round((entry_val - exit_val) * 100, 2)
-
-    elif strategy == "bear_call_spread":
+    elif strategy == "covered_call":
+        # Short OTM call at strike_a
         entry_val = bs_price(spot_entry, strike_a, T_entry, r, iv_entry, "call")
         exit_val = bs_price(spot_exit, strike_a, T_exit, r, iv_exit, "call")
         return round((entry_val - exit_val) * 100, 2)
 
+    elif strategy == "bull_put_spread":
+        # Short put at strike_a (higher), long put at strike_b (lower)
+        short_entry = bs_price(spot_entry, strike_a, T_entry, r, iv_entry, "put")
+        short_exit = bs_price(spot_exit, strike_a, T_exit, r, iv_exit, "put")
+        long_entry = bs_price(spot_entry, strike_b, T_entry, r, iv_entry, "put")
+        long_exit = bs_price(spot_exit, strike_b, T_exit, r, iv_exit, "put")
+        # net P&L = short put profit − long put cost change
+        return round(((short_entry - short_exit) - (long_entry - long_exit)) * 100, 2)
+
+    elif strategy == "bear_call_spread":
+        # Short call at strike_a (lower), long call at strike_b (higher)
+        short_entry = bs_price(spot_entry, strike_a, T_entry, r, iv_entry, "call")
+        short_exit = bs_price(spot_exit, strike_a, T_exit, r, iv_exit, "call")
+        long_entry = bs_price(spot_entry, strike_b, T_entry, r, iv_entry, "call")
+        long_exit = bs_price(spot_exit, strike_b, T_exit, r, iv_exit, "call")
+        return round(((short_entry - short_exit) - (long_entry - long_exit)) * 100, 2)
+
     elif strategy == "iron_condor":
-        # Sell OTM put + sell OTM call; approximate as sum of both credits
-        otm_offset = spot_entry * 0.05
-        put_k = spot_entry - otm_offset
-        call_k = spot_entry + otm_offset
-        put_entry = bs_price(spot_entry, put_k, T_entry, r, iv_entry, "put")
-        put_exit = bs_price(spot_exit, put_k, T_exit, r, iv_exit, "put")
-        call_entry = bs_price(spot_entry, call_k, T_entry, r, iv_entry, "call")
-        call_exit = bs_price(spot_exit, call_k, T_exit, r, iv_exit, "call")
+        # strike_a = short_put, strike_b = short_call (actual strikes from Trade)
+        # Long legs are OTM relative to shorts and partially cancel; model short legs only.
+        put_entry = bs_price(spot_entry, strike_a, T_entry, r, iv_entry, "put")
+        put_exit = bs_price(spot_exit, strike_a, T_exit, r, iv_exit, "put")
+        call_entry = bs_price(spot_entry, strike_b, T_entry, r, iv_entry, "call")
+        call_exit = bs_price(spot_exit, strike_b, T_exit, r, iv_exit, "call")
         return round(((put_entry - put_exit) + (call_entry - call_exit)) * 100, 2)
 
     elif strategy == "iron_butterfly":
@@ -321,25 +345,40 @@ DEBIT_STRATEGIES = {"long_call", "long_put", "long_straddle"}
 TARGET_DELTA = 0.30  # ~30-delta OTM for premium selling
 
 
-def _select_strike(spot: float, strategy: str, iv: float, dte: int) -> tuple[float, float]:
-    """Return (strike_a, strike_b) for the strategy."""
+def _select_strike(
+    spot: float,
+    strategy: str,
+    iv: float,
+    dte: int,
+    delta_target: float = TARGET_DELTA,
+    spread_width: Optional[float] = None,
+) -> tuple[float, float]:
+    """Return (strike_a, strike_b) for the strategy.
+
+    delta_target controls OTM-ness for credit and debit legs.
+    Lower values (e.g. 0.15) produce more OTM, cheaper options —
+    suitable for low-capital profiles with tight max_loss_per_trade limits.
+
+    spread_width: override the spread width (in dollar terms) for vertical spreads.
+    When None, defaults to max(2.0, spot * 0.02).
+    """
     T = max(dte / 365, 1e-6)
     r = 0.05
     sigma = iv
+    _spread_w = spread_width if spread_width is not None else max(2.0, spot * 0.02)
 
     if strategy in ("cash_secured_put", "bull_put_spread"):
-        # OTM put: binary-search for ~30-delta put
-        lo, hi = spot * 0.5, spot
+        # OTM put: binary-search for target-delta put
+        lo, hi = spot * 0.7, spot
         for _ in range(40):
             mid = (lo + hi) / 2
             g = bs_greeks(spot, mid, T, r, sigma, "put")
-            delta = abs(g["delta"])
-            if delta < TARGET_DELTA:
-                hi = mid
+            if abs(g["delta"]) < delta_target:
+                lo = mid   # too OTM, need higher strike
             else:
-                lo = mid
+                hi = mid   # too close to ATM, need lower strike
         strike_a = round(lo, 2)
-        strike_b = round(strike_a - spot * 0.05, 2)  # long put 5% below short
+        strike_b = round(strike_a - _spread_w, 2)  # long put below short
         return strike_a, strike_b
 
     elif strategy in ("covered_call", "bear_call_spread"):
@@ -347,24 +386,24 @@ def _select_strike(spot: float, strategy: str, iv: float, dte: int) -> tuple[flo
         for _ in range(40):
             mid = (lo + hi) / 2
             g = bs_greeks(spot, mid, T, r, sigma, "call")
-            if g["delta"] > TARGET_DELTA:
+            if g["delta"] > delta_target:
                 lo = mid
             else:
                 hi = mid
         strike_a = round(hi, 2)
-        strike_b = round(strike_a + spot * 0.05, 2)
+        strike_b = round(strike_a + _spread_w, 2)
         return strike_a, strike_b
 
     elif strategy in ("iron_condor", "iron_butterfly", "short_straddle"):
         return round(spot, 2), round(spot, 2)  # ATM for condor approximation
 
     elif strategy in ("long_call",):
-        # Slightly OTM call (~0.40 delta)
+        # OTM call at delta_target (default 0.30; beginner uses 0.15 → cheaper)
         lo, hi = spot, spot * 1.3
         for _ in range(40):
             mid = (lo + hi) / 2
             g = bs_greeks(spot, mid, T, r, sigma, "call")
-            if g["delta"] > 0.40:
+            if g["delta"] > delta_target:
                 lo = mid
             else:
                 hi = mid
@@ -375,7 +414,7 @@ def _select_strike(spot: float, strategy: str, iv: float, dte: int) -> tuple[flo
         for _ in range(40):
             mid = (lo + hi) / 2
             g = bs_greeks(spot, mid, T, r, sigma, "put")
-            if abs(g["delta"]) < 0.40:
+            if abs(g["delta"]) < delta_target:
                 hi = mid
             else:
                 lo = mid
@@ -601,75 +640,141 @@ def run_backtest(
                 days_since_last_entry += 1
                 continue
 
-            strategy_name = candidates[0].name
+            pass  # candidates already selected above; will iterate below
 
-        # Skip strategies the user hasn't enabled
-        if suitability.get(strategy_name, 0) <= 0:
-            continue
+        # ── Try candidates in rank order until one passes all gates ───────────
+        # This allows lower-ranked strategies (e.g. long_call/long_put) to be
+        # used when the top candidate is blocked by capital or risk constraints.
+        # Without this loop, a Beginner whose top candidate is always CSP would
+        # have zero trades because CSP is blocked by the capital gate every time.
+        _selected: Optional[tuple] = None  # (strategy_name, strike_a, strike_b, raw_prem, max_profit, max_loss, is_credit)
 
-        # Compute trade parameters
-        dte = target_dte
-        strike_a, strike_b = _select_strike(spot, strategy_name, iv, dte)
-        T = max(dte / 365, 1e-6)
-        r = 0.05
+        _candidate_iter = [force_strategy] if force_strategy else [c.name for c in candidates]
+        for _cname in _candidate_iter:
+            # Skip strategies the user hasn't enabled
+            if suitability.get(_cname, 0) <= 0:
+                continue
 
-        if strategy_name in CREDIT_STRATEGIES:
-            if strategy_name in ("cash_secured_put", "bull_put_spread"):
-                raw_prem = bs_price(spot, strike_a, T, r, iv, "put") * 100
-                max_profit = raw_prem
-                max_loss = max(abs(spot - strike_a) * 100 - raw_prem, raw_prem)
-            elif strategy_name in ("covered_call", "bear_call_spread"):
-                raw_prem = bs_price(spot, strike_a, T, r, iv, "call") * 100
-                max_profit = raw_prem
-                max_loss = max(abs(strike_a - spot) * 100 - raw_prem, raw_prem)
-            elif strategy_name in ("iron_condor", "iron_butterfly", "short_straddle"):
-                otm = spot * 0.05
-                put_val = bs_price(spot, spot - otm, T, r, iv, "put") * 100
-                call_val = bs_price(spot, spot + otm, T, r, iv, "call") * 100
-                raw_prem = put_val + call_val
-                max_profit = raw_prem
-                max_loss = otm * 100 - raw_prem
+            # Compute trade parameters for this candidate
+            _dte = target_dte
+            _delta_tgt = profile_dict.get("delta_target_otm", TARGET_DELTA)
+            _spread_w = profile_dict.get("spread_width", None)
+            _strike_a, _strike_b = _select_strike(spot, _cname, iv, _dte, delta_target=_delta_tgt, spread_width=_spread_w)
+            _T = max(_dte / 365, 1e-6)
+            _r = 0.05
+
+            if _cname in CREDIT_STRATEGIES:
+                if _cname == "cash_secured_put":
+                    _raw_prem = bs_price(spot, _strike_a, _T, _r, iv, "put") * 100
+                    _max_profit = _raw_prem
+                    _max_loss = max(abs(spot - _strike_a) * 100 - _raw_prem, _raw_prem)
+                elif _cname == "bull_put_spread":
+                    # Net credit = short put - long put; max_loss capped by spread width
+                    _short_p = bs_price(spot, _strike_a, _T, _r, iv, "put")
+                    _long_p = bs_price(spot, _strike_b, _T, _r, iv, "put")
+                    _raw_prem = (_short_p - _long_p) * 100
+                    _max_profit = _raw_prem
+                    _max_loss = (_strike_a - _strike_b) * 100 - _raw_prem
+                elif _cname == "covered_call":
+                    _raw_prem = bs_price(spot, _strike_a, _T, _r, iv, "call") * 100
+                    _max_profit = _raw_prem
+                    _max_loss = max(abs(_strike_a - spot) * 100 - _raw_prem, _raw_prem)
+                elif _cname == "bear_call_spread":
+                    # Net credit = short call - long call; max_loss capped by spread width
+                    _short_c = bs_price(spot, _strike_a, _T, _r, iv, "call")
+                    _long_c = bs_price(spot, _strike_b, _T, _r, iv, "call")
+                    _raw_prem = (_short_c - _long_c) * 100
+                    _max_profit = _raw_prem
+                    _max_loss = (_strike_b - _strike_a) * 100 - _raw_prem
+                elif _cname in ("iron_condor", "iron_butterfly", "short_straddle"):
+                    _otm = spot * 0.05
+                    _put_val = bs_price(spot, spot - _otm, _T, _r, iv, "put") * 100
+                    _call_val = bs_price(spot, spot + _otm, _T, _r, iv, "call") * 100
+                    _raw_prem = _put_val + _call_val
+                    _max_profit = _raw_prem
+                    _max_loss = _otm * 100 - _raw_prem
+                else:
+                    _raw_prem = bs_price(spot, _strike_a, _T, _r, iv, "put") * 100
+                    _max_profit = _raw_prem
+                    _max_loss = _raw_prem * 3
+                _is_credit = True
             else:
-                raw_prem = bs_price(spot, strike_a, T, r, iv, "put") * 100
-                max_profit = raw_prem
-                max_loss = raw_prem * 3
-            is_credit = True
-        else:
-            if strategy_name == "long_call":
-                raw_prem = bs_price(spot, strike_a, T, r, iv, "call") * 100
-            elif strategy_name == "long_put":
-                raw_prem = bs_price(spot, strike_a, T, r, iv, "put") * 100
-            else:  # long_straddle
-                raw_prem = (bs_price(spot, spot, T, r, iv, "call") +
-                            bs_price(spot, spot, T, r, iv, "put")) * 100
-            max_profit = raw_prem * 3  # theoretical upside
-            max_loss = raw_prem
-            is_credit = False
+                if _cname == "long_call":
+                    _raw_prem = bs_price(spot, _strike_a, _T, _r, iv, "call") * 100
+                elif _cname == "long_put":
+                    _raw_prem = bs_price(spot, _strike_a, _T, _r, iv, "put") * 100
+                else:  # long_straddle
+                    _raw_prem = (bs_price(spot, spot, _T, _r, iv, "call") +
+                                 bs_price(spot, spot, _T, _r, iv, "put")) * 100
+                _max_profit = _raw_prem * 3  # theoretical upside
+                _max_loss = _raw_prem
+                _is_credit = False
 
-        if max_profit <= 0 or max_loss <= 0:
-            continue
+            if _max_profit <= 0 or _max_loss <= 0:
+                continue
 
-        # Minimum premium quality gate:
-        # Skip trades where the credit/debit is too small to be worth the
-        # transaction cost and monitoring effort. $50 per contract = $0.50/share.
-        MIN_PREMIUM = 50.0
-        if raw_prem < MIN_PREMIUM:
+            # Minimum premium gate: skip if credit/debit too small to cover costs.
+            # Break-even analysis: with $8 cost/trade and 78% win rate + 2× stop,
+            # min credit needed = $8 / 0.34 ≈ $24. Use $40 floor for Beginner to ensure
+            # a meaningful edge above break-even (e.g. GLD <$150 era produced $4-10 credits
+            # which are below cost, making those trades systematically unprofitable).
+            # Standard profiles keep $50 floor (covers commissions for larger premiums).
+            _min_prem = 40.0 if profile_dict["max_loss_per_trade"] < 500 else 50.0
+            if _raw_prem < _min_prem:
+                continue
+
+            # Risk gate: effective risk must fit within profile's max loss per trade.
+            if _cname in ("cash_secured_put", "covered_call"):
+                _eff_risk = _raw_prem * 2.0
+            else:
+                _eff_risk = _max_loss
+            if _eff_risk > profile_dict["max_loss_per_trade"]:
+                continue
+
+            # Capital adequacy: CSP requires strike_a × 100 cash collateral.
+            if _cname == "cash_secured_put":
+                if _strike_a * 100 > profile_dict["capital"]:
+                    continue
+
+            # Capital adequacy: Covered Call requires owning 100 shares of GLD.
+            if _cname == "covered_call":
+                if spot * 100 > profile_dict["capital"]:
+                    continue
+
+            # Crash_risk long_put: require GLD already below EMA20 (downtrend confirmed).
+            if _cname == "long_put" and regime.regime == "crash_risk":
+                if spot >= float(row["ema20"]):
+                    continue
+
+            # All gates passed → take this candidate
+            _selected = (_cname, _strike_a, _strike_b, _raw_prem, _max_profit, _max_loss, _is_credit)
+            break
+
+        if _selected is None:
             days_since_last_entry += 1
             continue
 
-        # Crash_risk long_put: require price confirmation (GLD < EMA20)
-        # VIX ≥ 35 alone is not enough — GLD must already be in a downtrend
-        # before we pay for downside protection. Avoids buying puts into
-        # VIX spikes that quickly reverse.
-        if strategy_name == "long_put" and regime.regime == "crash_risk":
-            if spot >= float(row["ema20"]):
-                days_since_last_entry += 1
-                continue
+        strategy_name, strike_a, strike_b, raw_prem, max_profit, max_loss, is_credit = _selected
+        dte = target_dte
 
         # ── Simulate trade day-by-day until exit condition ────────────────────
         expiry_dt = entry_dt + timedelta(days=dte)
-        profit_target = max_profit * 0.50   # 50% profit target
-        loss_stop = max_loss * 2.0          # 2× max-loss stop
+        # Credit strategies: exit at 50% of premium collected (Tastytrade standard).
+        # Debit strategies: max_profit is a theoretical cap (e.g. 3× spot), so 50% is unreachable.
+        # Use premium_paid (= max_loss for debits) as the profit target base instead.
+        if is_credit:
+            profit_target = max_profit * 0.50   # 50% of credit collected
+        else:
+            profit_target = max_loss * 1.0      # target = 100% gain on premium paid (2× investment)
+        loss_stop = max_loss * 2.0          # 2× max-loss stop (default)
+        # All credit strategies: Tastytrade 2× credit collected as the stop.
+        # - CSP/CC: max_loss is notional ($4,400), using it as stop is unrealistic.
+        # - Spreads: max_loss is the hard cap; 2× cap never triggers.
+        # - Iron condor/butterfly: short-only P&L sim overestimates losses (missing long-leg offset);
+        #   2× credit stop prevents runaway losses in crash scenarios.
+        # Unified: stop = 2× credit for all credit strategies.
+        if is_credit:
+            loss_stop = raw_prem * 2.0
         early_exit_dte = 21                 # Tastytrade rule: exit at 21 DTE to avoid gamma risk
 
         pnl = 0.0
@@ -707,7 +812,7 @@ def run_backtest(
                     exit_reason = "50%_profit"
                     break
                 if day_pnl <= -loss_stop:
-                    pnl = day_pnl
+                    pnl = -loss_stop   # cap at stop price (stop order fills near loss_stop)
                     exit_date = check_dt
                     exit_reason = "2x_stop"
                     break
@@ -751,7 +856,10 @@ def run_backtest(
         # Cost model: commission (open + close) + slippage on premium
         num_legs = STRATEGY_LEGS.get(strategy_name, 1)
         commission = COMMISSION_PER_CONTRACT * num_legs * 2  # open + close
-        slippage = abs(raw_prem) * SLIPPAGE_PCT
+        # Slippage: percentage-based with per-leg floor.
+        # For cheap spreads (net_credit ~$31), 3% gives only $0.93 — below realistic bid-ask
+        # impact ($2-5/leg). Floor ensures multi-leg strategies pay realistic execution cost.
+        slippage = max(abs(raw_prem) * SLIPPAGE_PCT, SLIPPAGE_PER_LEG_FLOOR * num_legs)
         trade_cost = round(commission + slippage, 2)
         net_pnl = round(pnl - trade_cost, 2)
 
@@ -852,6 +960,40 @@ def print_report(trades: list[Trade], profile_name: str, show_chart: bool):
     console.print(f"  Total P&L (net):   [{net_color}]${total_net_pnl:+,.0f}[/{net_color}]  [dim](cost: ${total_cost:,.0f} total / ${avg_cost:.0f} avg/trade)[/dim]")
     console.print(f"  Sharpe (weekly):   {sharpe:.2f}")
     console.print(f"  Max drawdown:      [red]-${max_dd:,.0f}[/red]")
+
+    # ── Supplementary risk metrics ─────────────────────────────────────────
+    worst_net = min(t.net_pnl for t in trades)
+
+    max_consec = cur_consec = 0
+    for t in sorted(trades, key=lambda x: x.entry_date):
+        if not t.net_won:
+            cur_consec += 1
+            max_consec = max(max_consec, cur_consec)
+        else:
+            cur_consec = 0
+
+    from collections import defaultdict
+    by_year: dict[int, float] = defaultdict(float)
+    for t in trades:
+        by_year[t.entry_date.year] += t.net_pnl
+    year_str = "  ".join(
+        f"{y}: [{'green' if v >= 0 else 'red'}]{'+'if v >= 0 else ''}${v:,.0f}[/{'green' if v >= 0 else 'red'}]"
+        for y, v in sorted(by_year.items())
+    )
+
+    console.print(f"  Worst trade (net): [red]${worst_net:+,.0f}[/red]")
+    console.print(f"  Max consec losses: {max_consec}")
+    console.print(f"  P&L by year:       {year_str}")
+
+    csp_trades = [t for t in trades if t.strategy == "cash_secured_put"]
+    if csp_trades:
+        profile_capital = PROFILES.get(profile_name, {}).get("capital", 0)
+        avg_req = sum(t.strike_a * 100 for t in csp_trades) / len(csp_trades)
+        max_req = max(t.strike_a * 100 for t in csp_trades)
+        console.print(
+            f"  CSP capital req:   avg ${avg_req:,.0f}  max ${max_req:,.0f}"
+            f"  [dim](profile capital: ${profile_capital:,})[/dim]"
+        )
 
     # Per-strategy breakdown
     strats: dict[str, dict] = {}

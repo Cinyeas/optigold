@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/constants.dart';
@@ -8,25 +9,46 @@ import 'models/position.dart';
 
 class ApiClient {
   late final Dio _dio;
+  late final SharedPreferences _prefs;
 
-  ApiClient({String? baseUrl}) {
+  static const _kSignalCache  = 'cache_v1_latest_signal';
+  static const _kMarketCache  = 'cache_v1_market_snapshot';
+
+  ApiClient._({required String baseUrl, required SharedPreferences prefs}) {
+    _prefs = prefs;
     _dio = Dio(BaseOptions(
-      baseUrl: baseUrl ?? AppConstants.defaultBaseUrl,
+      baseUrl: baseUrl,
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 20),
       headers: {'Content-Type': 'application/json'},
-    ));
-    _dio.interceptors.add(LogInterceptor(
-      requestBody: false,
-      responseBody: false,
-      error: true,
     ));
   }
 
   static Future<ApiClient> create() async {
     final prefs = await SharedPreferences.getInstance();
     final url   = prefs.getString(AppConstants.baseUrlKey) ?? AppConstants.defaultBaseUrl;
-    return ApiClient(baseUrl: url);
+    return ApiClient._(baseUrl: url, prefs: prefs);
+  }
+
+  /// Synchronous factory — use when SharedPreferences is already loaded.
+  static ApiClient createSync(SharedPreferences prefs) {
+    final url = prefs.getString(AppConstants.baseUrlKey) ?? AppConstants.defaultBaseUrl;
+    return ApiClient._(baseUrl: url, prefs: prefs);
+  }
+
+  // ── Cache helpers ───────────────────────────────────────────
+  SignalModel? getCachedSignal() {
+    final s = _prefs.getString(_kSignalCache);
+    if (s == null) return null;
+    try { return SignalModel.fromJson(jsonDecode(s) as Map<String, dynamic>); }
+    catch (_) { return null; }
+  }
+
+  MarketSnapshot? getCachedMarket() {
+    final s = _prefs.getString(_kMarketCache);
+    if (s == null) return null;
+    try { return MarketSnapshot.fromJson(jsonDecode(s) as Map<String, dynamic>); }
+    catch (_) { return null; }
   }
 
   void updateBaseUrl(String url) {
@@ -36,7 +58,9 @@ class ApiClient {
   // ── Signals ────────────────────────────────────────────────
   Future<SignalModel> getLatestSignal() async {
     final res = await _dio.get(AppConstants.signalLatest);
-    return SignalModel.fromJson(res.data as Map<String, dynamic>);
+    final model = SignalModel.fromJson(res.data as Map<String, dynamic>);
+    await _prefs.setString(_kSignalCache, jsonEncode(res.data));
+    return model;
   }
 
   Future<SignalModel> refreshSignal() async {
@@ -67,7 +91,9 @@ class ApiClient {
   // ── Market ─────────────────────────────────────────────────
   Future<MarketSnapshot> getMarketSnapshot() async {
     final res = await _dio.get(AppConstants.marketSnapshot);
-    return MarketSnapshot.fromJson(res.data as Map<String, dynamic>);
+    final model = MarketSnapshot.fromJson(res.data as Map<String, dynamic>);
+    await _prefs.setString(_kMarketCache, jsonEncode(res.data));
+    return model;
   }
 
   // ── Profile ────────────────────────────────────────────────
@@ -94,6 +120,11 @@ class ApiClient {
 
   Future<PositionModel> createPosition(Map<String, dynamic> data) async {
     final res = await _dio.post(AppConstants.positions, data: data);
+    return PositionModel.fromJson(res.data as Map<String, dynamic>);
+  }
+
+  Future<PositionModel> updatePosition(int id, Map<String, dynamic> data) async {
+    final res = await _dio.patch('${AppConstants.positions}$id', data: data);
     return PositionModel.fromJson(res.data as Map<String, dynamic>);
   }
 

@@ -5,12 +5,12 @@ import 'api_provider.dart';
 class ProfileNotifier extends AsyncNotifier<UserProfile> {
   @override
   Future<UserProfile> build() async {
-    final client = await ref.watch(apiClientProvider.future);
+    final client = ref.watch(apiClientProvider); // sync
     return client.getProfile();
   }
 
   Future<void> patch(Map<String, dynamic> updates) async {
-    final client = await ref.read(apiClientProvider.future);
+    final client = ref.read(apiClientProvider); // sync
     final updated = await client.updateProfile(updates);
     state = AsyncData(updated);
   }

@@ -16,7 +16,9 @@ class AdaptiveShell extends StatelessWidget {
   }
 }
 
-// ── iOS: CupertinoTabScaffold ───────────────────────────────
+// ── iOS: Scaffold + CupertinoTabBar ────────────────────────
+// CupertinoTabScaffold is intentionally NOT used here:
+// it creates per-tab navigators that conflict with go_router's ShellRoute.
 class _IOSShell extends StatefulWidget {
   final Widget child;
   const _IOSShell({required this.child});
@@ -32,8 +34,10 @@ class _IOSShellState extends State<_IOSShell> {
 
   @override
   Widget build(BuildContext context) {
-    return CupertinoTabScaffold(
-      tabBar: CupertinoTabBar(
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: widget.child,
+      bottomNavigationBar: CupertinoTabBar(
         currentIndex: _index,
         onTap: (i) {
           setState(() => _index = i);
@@ -49,7 +53,6 @@ class _IOSShellState extends State<_IOSShell> {
           BottomNavigationBarItem(icon: Icon(CupertinoIcons.settings), label: 'Settings'),
         ],
       ),
-      tabBuilder: (_, __) => widget.child,
     );
   }
 }

@@ -151,6 +151,16 @@ async def generate_signal(db: AsyncSession) -> FormattedSignal:
 
     # ── Layer 5: Parameters + Scoring ────────────────────────────────────────
 
+    _SINGLE_LEG_CREDIT = {"cash_secured_put", "covered_call"}
+
+    # For low-capital profiles (max_loss_per_trade < $500), use tighter parameters:
+    # - Lower delta target (15-delta) → more OTM, cheaper options
+    # - Narrower spread width ($2) → max_loss ≈ $170, within the $300 limit
+    # For standard profiles: 30-delta, default spread width (spot × 0.02)
+    _is_low_capital = quant_profile.max_loss_per_trade < 500
+    _delta_target = 0.15 if _is_low_capital else 0.30
+    _spread_width = 3.0 if _is_low_capital else None   # $3 width: max_loss ≈ $255 < $300 limit
+
     scored = []
     for candidate in candidates:
         params = generate_parameters(
@@ -158,7 +168,34 @@ async def generate_signal(db: AsyncSession) -> FormattedSignal:
             spot=spot,
             atm_iv=atm_iv,
             dte_target=dte_target,
+            delta_target_otm=_delta_target,
+            spread_width=_spread_width,
         )
+
+        # ── Risk gate: mirror backtest P0 filters ────────────────────────────
+        # Single-leg credit: effective risk = 2× premium (Tastytrade 2× stop standard).
+        # All other strategies: effective risk = max_loss (defined-risk cap).
+        if candidate.name in _SINGLE_LEG_CREDIT:
+            effective_risk = params.premium_collected * 2.0
+        else:
+            effective_risk = params.max_loss
+        if effective_risk > quant_profile.max_loss_per_trade:
+            logger.debug(
+                "Skipping %s: effective_risk $%.0f > max_loss_per_trade $%.0f",
+                candidate.name, effective_risk, quant_profile.max_loss_per_trade,
+            )
+            continue
+
+        # Capital adequacy: CSP requires strike × 100 cash collateral.
+        if candidate.name == "cash_secured_put":
+            required_capital = (params.strike_a or spot * 0.90) * 100
+            if required_capital > quant_profile.capital:
+                logger.debug(
+                    "Skipping CSP: required capital $%.0f > profile capital $%.0f",
+                    required_capital, quant_profile.capital,
+                )
+                continue
+
         # Kelly sizing
         pop = params.probability_of_profit / 100
         avg_win = params.max_profit if params.max_profit > 0 else params.premium_collected

@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from app.dependencies import get_db
 from app.models.db.user_position import UserPosition
-from app.models.schemas.position import PositionCreate, PositionResponse, PositionClose
+from app.models.schemas.position import PositionCreate, PositionResponse, PositionClose, PositionUpdate
 
 router = APIRouter()
 
@@ -59,6 +59,30 @@ async def get_position(position_id: int, db: AsyncSession = Depends(get_db)):
     pos = result.scalar_one_or_none()
     if pos is None:
         raise HTTPException(status_code=404, detail=f"Position {position_id} not found.")
+    return pos
+
+
+@router.patch("/{position_id}", response_model=PositionResponse)
+async def update_position(
+    position_id: int,
+    payload: PositionUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Edit an open position's fields (correct entry errors)."""
+    result = await db.execute(
+        select(UserPosition).where(UserPosition.id == position_id)
+    )
+    pos = result.scalar_one_or_none()
+    if pos is None:
+        raise HTTPException(status_code=404, detail=f"Position {position_id} not found.")
+    for field, value in payload.model_dump(exclude_none=True).items():
+        setattr(pos, field, value)
+    # Recompute entry deviation if both prices are now known
+    if pos.actual_entry_price is not None and pos.entry_price:
+        pos.entry_deviation_pct = round(
+            (pos.actual_entry_price - pos.entry_price) / pos.entry_price * 100, 2
+        )
+    await db.flush()
     return pos
 
 

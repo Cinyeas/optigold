@@ -24,13 +24,12 @@ class SignalCard extends StatelessWidget {
       onTap: onTap,
       child: Stack(
         children: [
+          // Outer: border + shadow only (no color — ClipRRect inside handles fill)
           Container(
             decoration: BoxDecoration(
-              color: AppColors.surface,
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color: isPrimary ? AppColors.cardBorder : AppColors.divider,
-                width: isPrimary ? 1.0 : 1.0,
               ),
               boxShadow: isPrimary
                   ? [
@@ -42,40 +41,44 @@ class SignalCard extends StatelessWidget {
                     ]
                   : null,
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Scan-line top highlight (Style A signature)
-                if (isPrimary)
-                  Container(
-                    height: 2,
-                    decoration: BoxDecoration(
-                      gradient: AppColors.cardScanLine,
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            // Inner: ClipRRect ensures scan-line + content are clipped to rounded rect
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(19),
+              child: ColoredBox(
+                color: AppColors.surface,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Scan-line (no borderRadius needed — ClipRRect clips it)
+                    if (isPrimary)
+                      Container(
+                        height: 2,
+                        decoration: BoxDecoration(gradient: AppColors.cardScanLine),
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.all(18),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildTopRow(),
+                          const SizedBox(height: 4),
+                          Text(signal.action, style: AppTypography.strategyName),
+                          const SizedBox(height: 2),
+                          _buildSubtitle(),
+                          const SizedBox(height: 16),
+                          _buildScoreRow(),
+                          const SizedBox(height: 14),
+                          _buildMetricsGrid(),
+                          if (signal.reasoningPlain != null && signal.reasoningPlain!.isNotEmpty) ...[
+                            const SizedBox(height: 14),
+                            _buildPlainText(),
+                          ],
+                        ],
+                      ),
                     ),
-                  ),
-                Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildTopRow(),
-                      const SizedBox(height: 4),
-                      Text(signal.action, style: AppTypography.strategyName),
-                      const SizedBox(height: 2),
-                      _buildSubtitle(),
-                      const SizedBox(height: 16),
-                      _buildScoreRow(),
-                      const SizedBox(height: 14),
-                      _buildMetricsGrid(),
-                      if (signal.reasoningPlain != null && signal.reasoningPlain!.isNotEmpty) ...[
-                        const SizedBox(height: 14),
-                        _buildPlainText(),
-                      ],
-                    ],
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
 
@@ -194,7 +197,7 @@ class SignalCard extends StatelessWidget {
       crossAxisCount: 2,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      childAspectRatio: 2.2,
+      childAspectRatio: 2.0,
       crossAxisSpacing: 8,
       mainAxisSpacing: 8,
       children: items.map((m) => _MetricCell(pair: m)).toList(),

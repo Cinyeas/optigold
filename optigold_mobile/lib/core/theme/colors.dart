@@ -21,7 +21,7 @@ class AppColors {
   // Card accent: purple border + top scan line
   static const Color cardBorder = Color(0xFF6C63FF);
   static const LinearGradient cardScanLine = LinearGradient(
-    colors: [Color(0xFF6C63FF), Color(0xFF4E46E5), Colors.transparent],
+    colors: [Color(0xFF6C63FF), Color(0xFF4E46E5), Color(0x006C63FF)],
     stops: [0.0, 0.5, 1.0],
   );
 

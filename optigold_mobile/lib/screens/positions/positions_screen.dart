@@ -51,11 +51,15 @@ class _PositionsScreenState extends ConsumerState<PositionsScreen>
         children: [
           _PositionList(
             positions: positions.where((p) => p.isOpen).toList(),
-            onClose: (p) => _showCloseSheet(context, p),
+            onClose: (p) => _showCloseSheet(p),
+            onEdit:  (p) => _showEditSheet(p),
+            onDelete: (p) => _confirmDelete(p),
           ),
           _PositionList(
             positions: positions.where((p) => p.isClosed).toList(),
             onClose: null,
+            onEdit:  (p) => _showEditSheet(p),
+            onDelete: (p) => _confirmDelete(p),
           ),
         ],
       ),
@@ -99,16 +103,18 @@ class _PositionsScreenState extends ConsumerState<PositionsScreen>
           );
   }
 
-  Future<void> _showCloseSheet(BuildContext context, PositionModel pos) async {
+  // ── Close sheet ─────────────────────────────────────────────────────────────
+  Future<void> _showCloseSheet(PositionModel pos) async {
     final priceCtrl = TextEditingController();
     String? selectedReason;
+    String? errorMsg;
 
     const reasons = [
-      ('profit_target', 'Profit Target (50%)'),
+      ('profit_target', 'Profit Target'),
       ('stop_loss',     'Stop Loss'),
       ('21dte',         '21 DTE Rule'),
       ('expiry',        'Expiry'),
-      ('manual',        'Manual Close'),
+      ('manual',        'Manual'),
     ];
 
     await showModalBottomSheet(
@@ -118,17 +124,161 @@ class _PositionsScreenState extends ConsumerState<PositionsScreen>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setState) => Padding(
-          padding: EdgeInsets.only(
-            left: 24, right: 24, top: 20,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
-          ),
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (sheetCtx, setSheetState) {
+          return Padding(
+            padding: EdgeInsets.only(
+              left: 24, right: 24, top: 20,
+              bottom: MediaQuery.of(sheetCtx).viewInsets.bottom + 24,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40, height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.divider,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text('Close Position', style: AppTypography.strategyName),
+                Text(pos.formattedStrategy, style: AppTypography.bodyRegular),
+                const SizedBox(height: 20),
+
+                TextField(
+                  controller: priceCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  autofocus: true,
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  decoration: InputDecoration(
+                    labelText: 'Close Price',
+                    labelStyle: const TextStyle(color: AppColors.textSecondary),
+                    prefixText: '\$',
+                    prefixStyle: TextStyle(color: AppColors.gold),
+                    errorText: errorMsg,
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppColors.divider),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppColors.primary),
+                    ),
+                    errorBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppColors.loss),
+                    ),
+                    focusedErrorBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppColors.loss),
+                    ),
+                    filled: true,
+                    fillColor: AppColors.background,
+                  ),
+                  onChanged: (_) {
+                    if (errorMsg != null) setSheetState(() => errorMsg = null);
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                Text('Exit Reason', style: AppTypography.metricLabel),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: reasons.map((r) {
+                    final (code, label) = r;
+                    final selected = selectedReason == code;
+                    return ChoiceChip(
+                      label: Text(label,
+                          style: AppTypography.chipLabel.copyWith(
+                            color: selected ? Colors.white : AppColors.textSecondary,
+                            fontSize: 11,
+                          )),
+                      selected: selected,
+                      selectedColor: AppColors.primary,
+                      backgroundColor: AppColors.background,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        side: BorderSide(
+                          color: selected ? AppColors.primary : AppColors.divider,
+                        ),
+                      ),
+                      onSelected: (_) => setSheetState(() => selectedReason = code),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 20),
+
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      minimumSize: const Size.fromHeight(48),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () async {
+                      final price = double.tryParse(priceCtrl.text.trim());
+                      if (price == null) {
+                        setSheetState(() => errorMsg = 'Enter a valid price');
+                        return;
+                      }
+                      // Close sheet first, then call API
+                      if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
+                      try {
+                        await ref.read(positionsProvider.notifier).close(
+                          pos.id, price,
+                          closeReason: selectedReason,
+                        );
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Close failed: $e'), backgroundColor: AppColors.loss),
+                          );
+                        }
+                      }
+                    },
+                    child: const Text('Confirm Close'),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ── Edit sheet ─────────────────────────────────────────────────────────────
+  Future<void> _showEditSheet(PositionModel pos) async {
+    final entryCtrl  = TextEditingController(text: pos.entryPrice?.toString() ?? '');
+    final actualCtrl = TextEditingController(text: pos.actualEntryPrice?.toString() ?? '');
+    final qtyCtrl    = TextEditingController(text: pos.quantity?.toString() ?? '');
+    final strikeCtrl = TextEditingController(text: pos.strikeA?.toString() ?? '');
+    final notesCtrl  = TextEditingController(text: pos.notes ?? '');
+
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetCtx) => Padding(
+        padding: EdgeInsets.only(
+          left: 24, right: 24, top: 20,
+          bottom: MediaQuery.of(sheetCtx).viewInsets.bottom + 24,
+        ),
+        child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Handle bar
               Center(
                 child: Container(
                   width: 40, height: 4,
@@ -139,77 +289,58 @@ class _PositionsScreenState extends ConsumerState<PositionsScreen>
                 ),
               ),
               const SizedBox(height: 20),
-              Text('Close Position', style: AppTypography.strategyName),
+              Text('Edit Position', style: AppTypography.strategyName),
               Text(pos.formattedStrategy, style: AppTypography.bodyRegular),
               const SizedBox(height: 20),
 
-              // Close price input
-              TextField(
-                controller: priceCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                style: const TextStyle(color: AppColors.textPrimary),
-                decoration: InputDecoration(
-                  labelText: 'Close Price',
-                  labelStyle: const TextStyle(color: AppColors.textSecondary),
-                  prefixText: '\$',
-                  prefixStyle: TextStyle(color: AppColors.gold),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppColors.divider),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppColors.primary),
-                  ),
-                  filled: true,
-                  fillColor: AppColors.background,
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              // Exit reason
-              Text('Exit Reason', style: AppTypography.metricLabel),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: reasons.map((r) {
-                  final (code, label) = r;
-                  final selected = selectedReason == code;
-                  return ChoiceChip(
-                    label: Text(label,
-                        style: AppTypography.chipLabel.copyWith(
-                          color: selected ? Colors.white : AppColors.textSecondary,
-                          fontSize: 11,
-                        )),
-                    selected: selected,
-                    selectedColor: AppColors.primary,
-                    backgroundColor: AppColors.background,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      side: BorderSide(
-                        color: selected ? AppColors.primary : AppColors.divider,
-                      ),
-                    ),
-                    onSelected: (_) => setState(() => selectedReason = code),
-                  );
-                }).toList(),
-              ),
+              _EditField(controller: entryCtrl,  label: 'Signal Entry Price',  prefix: '\$', numeric: true),
+              const SizedBox(height: 12),
+              _EditField(controller: actualCtrl, label: 'Actual Fill Price',    prefix: '\$', numeric: true),
+              const SizedBox(height: 12),
+              _EditField(controller: qtyCtrl,    label: 'Quantity (contracts)', numeric: true),
+              const SizedBox(height: 12),
+              _EditField(controller: strikeCtrl, label: 'Strike A',             prefix: '\$', numeric: true),
+              const SizedBox(height: 12),
+              _EditField(controller: notesCtrl,  label: 'Notes', maxLines: 3),
               const SizedBox(height: 20),
 
               SizedBox(
                 width: double.infinity,
                 child: FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    minimumSize: const Size.fromHeight(48),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
                   onPressed: () async {
-                    final price = double.tryParse(priceCtrl.text);
-                    if (price == null) return;
-                    Navigator.pop(ctx);
-                    await ref.read(positionsProvider.notifier).close(
-                      pos.id, price,
-                      closeReason: selectedReason,
-                    );
+                    final updates = <String, dynamic>{};
+                    final ep = double.tryParse(entryCtrl.text.trim());
+                    if (ep != null) updates['entry_price'] = ep;
+                    final ap = double.tryParse(actualCtrl.text.trim());
+                    if (ap != null) updates['actual_entry_price'] = ap;
+                    final q = int.tryParse(qtyCtrl.text.trim());
+                    if (q != null) updates['quantity'] = q;
+                    final sa = double.tryParse(strikeCtrl.text.trim());
+                    if (sa != null) updates['strike_a'] = sa;
+                    final notes = notesCtrl.text.trim();
+                    if (notes.isNotEmpty) updates['notes'] = notes;
+
+                    if (updates.isEmpty) {
+                      if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
+                      return;
+                    }
+                    if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
+                    try {
+                      await ref.read(positionsProvider.notifier).edit(pos.id, updates);
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Update failed: $e'), backgroundColor: AppColors.loss),
+                        );
+                      }
+                    }
                   },
-                  child: const Text('Confirm Close'),
+                  child: const Text('Save Changes'),
                 ),
               ),
             ],
@@ -218,12 +349,99 @@ class _PositionsScreenState extends ConsumerState<PositionsScreen>
       ),
     );
   }
+
+  // ── Delete confirmation ────────────────────────────────────────────────────
+  Future<void> _confirmDelete(PositionModel pos) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text('Delete Position', style: AppTypography.bodyMedium),
+        content: Text(
+          'This will permanently delete this position record. This cannot be undone.',
+          style: AppTypography.bodyRegular,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: AppColors.loss),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      try {
+        await ref.read(positionsProvider.notifier).delete(pos.id);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Delete failed: $e'), backgroundColor: AppColors.loss),
+          );
+        }
+      }
+    }
+  }
 }
 
+// ── Helper widget ────────────────────────────────────────────────────────────
+class _EditField extends StatelessWidget {
+  final TextEditingController controller;
+  final String label;
+  final String? prefix;
+  final bool numeric;
+  final int maxLines;
+  const _EditField({
+    required this.controller,
+    required this.label,
+    this.prefix,
+    this.numeric = false,
+    this.maxLines = 1,
+  });
+
+  @override
+  Widget build(BuildContext context) => TextField(
+        controller: controller,
+        keyboardType: numeric
+            ? const TextInputType.numberWithOptions(decimal: true)
+            : TextInputType.text,
+        maxLines: maxLines,
+        style: const TextStyle(color: AppColors.textPrimary),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(color: AppColors.textSecondary),
+          prefixText: prefix,
+          prefixStyle: TextStyle(color: AppColors.gold),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: AppColors.divider),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: AppColors.primary),
+          ),
+          filled: true,
+          fillColor: AppColors.background,
+        ),
+      );
+}
+
+// ── Position list & card ─────────────────────────────────────────────────────
 class _PositionList extends StatelessWidget {
   final List<PositionModel> positions;
   final Function(PositionModel)? onClose;
-  const _PositionList({required this.positions, this.onClose});
+  final Function(PositionModel) onEdit;
+  final Function(PositionModel) onDelete;
+  const _PositionList({
+    required this.positions,
+    this.onClose,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -248,7 +466,9 @@ class _PositionList extends StatelessWidget {
       itemBuilder: (_, i) => _PositionCard(
         position: positions[i],
         index: i,
-        onClose: onClose != null ? () => onClose!(positions[i]) : null,
+        onClose:  onClose != null ? () => onClose!(positions[i]) : null,
+        onEdit:   () => onEdit(positions[i]),
+        onDelete: () => onDelete(positions[i]),
       ),
     );
   }
@@ -258,11 +478,19 @@ class _PositionCard extends StatelessWidget {
   final PositionModel position;
   final int index;
   final VoidCallback? onClose;
-  const _PositionCard({required this.position, required this.index, this.onClose});
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+  const _PositionCard({
+    required this.position,
+    required this.index,
+    this.onClose,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final pnl     = position.realizedPnl;
+    final pnl      = position.realizedPnl;
     final isProfit = (pnl ?? 0) >= 0;
 
     return Container(
@@ -305,6 +533,37 @@ class _PositionCard extends StatelessWidget {
                     color: isProfit ? AppColors.profit : AppColors.loss,
                   ),
                 ),
+              // Actions menu
+              const SizedBox(width: 4),
+              PopupMenuButton<_Action>(
+                icon: const Icon(Icons.more_vert, color: AppColors.textMuted, size: 18),
+                color: AppColors.surface,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                onSelected: (action) {
+                  switch (action) {
+                    case _Action.edit:   onEdit();   break;
+                    case _Action.delete: onDelete(); break;
+                  }
+                },
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: _Action.edit,
+                    child: Row(children: [
+                      const Icon(Icons.edit_outlined, size: 16, color: AppColors.textSecondary),
+                      const SizedBox(width: 8),
+                      Text('Edit', style: AppTypography.bodyRegular),
+                    ]),
+                  ),
+                  PopupMenuItem(
+                    value: _Action.delete,
+                    child: Row(children: [
+                      const Icon(Icons.delete_outline, size: 16, color: AppColors.loss),
+                      const SizedBox(width: 8),
+                      Text('Delete', style: AppTypography.bodyRegular.copyWith(color: AppColors.loss)),
+                    ]),
+                  ),
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 10),
@@ -326,7 +585,6 @@ class _PositionCard extends StatelessWidget {
               ],
             ],
           ),
-          // DTE display + 21-DTE warning
           if (position.isOpen && position.expiry != null) ...[
             const SizedBox(height: 8),
             _DteWarning(expiry: position.expiry!),
@@ -349,6 +607,8 @@ class _PositionCard extends StatelessWidget {
     ).animate().fadeIn(delay: (index * 50).ms).slideY(begin: 0.05, end: 0);
   }
 }
+
+enum _Action { edit, delete }
 
 class _DteWarning extends StatelessWidget {
   final String expiry;

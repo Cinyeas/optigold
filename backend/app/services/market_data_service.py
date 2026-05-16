@@ -97,6 +97,19 @@ def _adx(closes: list[float], highs: list[float], lows: list[float], period: int
 
 # ── Alpaca data fetchers ──────────────────────────────────────────────────────
 
+def _fetch_vix() -> float:
+    """Fetch latest VIX close from yfinance. Falls back to 20.0 on any error."""
+    try:
+        import yfinance as yf
+        vix = yf.Ticker("^VIX")
+        hist = vix.history(period="2d")
+        if not hist.empty:
+            return round(float(hist["Close"].iloc[-1]), 2)
+    except Exception as e:
+        logger.debug("VIX fetch failed: %s", e)
+    return 20.0
+
+
 def _fetch_gld_bars(lookback_days: int = 60) -> Optional[dict]:
     """Fetch daily GLD bars from Alpaca. Returns None on failure."""
     try:
@@ -363,7 +376,7 @@ def get_gld_snapshot() -> dict:
         "gld_iv_rank": round(ivr, 1),
         "gld_iv_percentile": round(ivp, 1),
         "gld_hv_20d": round(hv_20d, 4),
-        "vix_level": 0.0,   # Alpaca free tier doesn't include VIX; set to 0 as placeholder
+        "vix_level": _fetch_vix(),   # yfinance fallback (Alpaca free tier lacks VIX)
         "iv_premium_ratio": round(iv_prem, 3),
         "put_call_skew": put_call_skew,
         "ema20": round(ema20, 2),

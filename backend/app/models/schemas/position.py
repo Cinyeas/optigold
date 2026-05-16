@@ -45,3 +45,14 @@ class PositionClose(BaseModel):
     close_reason: Optional[str] = None
     # profit_target | stop_loss | manual | expiry | 21dte
     notes: Optional[str] = None
+
+
+class PositionUpdate(BaseModel):
+    """Editable fields for correcting a mistaken entry."""
+    entry_price: Optional[float] = None
+    actual_entry_price: Optional[float] = None
+    quantity: Optional[int] = None
+    strike_a: Optional[float] = None
+    strike_b: Optional[float] = None
+    expiry: Optional[date] = None
+    notes: Optional[str] = None

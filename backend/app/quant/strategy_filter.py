@@ -99,7 +99,7 @@ _REGIME_STRATEGY_FIT: dict[str, dict[str, float]] = {
     "strong_trend_up": {
         "long_call": 0.90,
         "bull_put_spread": 0.85,
-        "cash_secured_put": 0.75,
+        "cash_secured_put": 0.85,  # raised: CSP performs well in sustained uptrends (OTM put rarely tested)
         "covered_call": 0.60,
         "bear_call_spread": 0.05,
         "long_put": 0.05,

@@ -13,12 +13,12 @@ import '../utils/constants.dart';
 final _rootNavigatorKey    = GlobalKey<NavigatorState>();
 final _shellNavigatorKey   = GlobalKey<NavigatorState>();
 
-GoRouter buildRouter() => GoRouter(
+GoRouter buildRouter(SharedPreferences prefs) => GoRouter(
       navigatorKey: _rootNavigatorKey,
       initialLocation: '/home',
-      redirect: (context, state) async {
-        final prefs  = await SharedPreferences.getInstance();
-        final done   = prefs.getBool(AppConstants.onboardedKey) ?? false;
+      redirect: (context, state) {
+        // Synchronous — prefs already loaded in main()
+        final done = prefs.getBool(AppConstants.onboardedKey) ?? false;
         if (!done && state.matchedLocation != '/onboarding') {
           return '/onboarding';
         }

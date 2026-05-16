@@ -2,11 +2,12 @@ import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:go_router/go_router.dart';
 import '../../core/theme/colors.dart';
 import '../../core/theme/typography.dart';
 import '../../core/utils/constants.dart';
 import '../../providers/profile_provider.dart';
+import '../../providers/prefs_provider.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -24,8 +25,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _loadUrl();
   }
 
-  Future<void> _loadUrl() async {
-    final prefs = await SharedPreferences.getInstance();
+  void _loadUrl() {
+    final prefs = ref.read(sharedPreferencesProvider);
     _urlController.text =
         prefs.getString(AppConstants.baseUrlKey) ?? AppConstants.defaultBaseUrl;
   }
@@ -56,6 +57,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ],
               ),
             ),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.primary,
+              side: const BorderSide(color: AppColors.primary),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              minimumSize: const Size.fromHeight(44),
+            ),
+            icon: const Icon(Icons.tune, size: 16),
+            label: const Text('重新配置风险偏好'),
+            onPressed: () async {
+              await ref.read(sharedPreferencesProvider).remove(AppConstants.onboardedKey);
+              if (context.mounted) context.go('/onboarding');
+            },
           ),
           const SizedBox(height: 24),
 
@@ -166,8 +182,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Future<void> _saveUrl() async {
     final url = _urlController.text.trim();
     if (url.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(AppConstants.baseUrlKey, url);
+    await ref.read(sharedPreferencesProvider).setString(AppConstants.baseUrlKey, url);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Server URL saved. Restart app to apply.')),

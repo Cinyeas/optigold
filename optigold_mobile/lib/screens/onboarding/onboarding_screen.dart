@@ -5,11 +5,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/theme/colors.dart';
 import '../../core/theme/typography.dart';
 import '../../core/utils/constants.dart';
+import '../../providers/prefs_provider.dart';
 import '../../providers/profile_provider.dart';
+import '../../providers/signal_provider.dart';
 
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key});
@@ -54,21 +55,24 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   Future<void> _finish() async {
-    // Save onboarding flag first — navigation must happen regardless of backend status
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(AppConstants.onboardedKey, true);
+    // Synchronous — prefs already loaded in main()
+    await ref.read(sharedPreferencesProvider).setBool(AppConstants.onboardedKey, true);
 
     // Best-effort sync to backend; don't block navigation on failure
     try {
       await ref.read(profileProvider.notifier).patch({
-        'capital':           _capital,
+        'capital':            _capital,
         'max_loss_per_trade': _maxLoss,
-        'accepts_options':   _acceptsOptions,
-        'accepts_margin':    _acceptsMargin,
-        'accepts_multi_leg': _acceptsMultiLeg,
-        'experience_level':  _experience,
-        'time_horizon':      _horizon,
+        'accepts_options':    _acceptsOptions,
+        'accepts_margin':     _acceptsMargin,
+        'accepts_multi_leg':  _acceptsMultiLeg,
+        'experience_level':   _experience,
+        'time_horizon':       _horizon,
       });
+      // Regenerate signal for new profile; push result directly into latestSignalProvider
+      // (no invalidate needed — avoids triggering a loading state on home screen)
+      final newSignal = await ref.read(signalRefreshProvider.future);
+      ref.read(latestSignalProvider.notifier).state = AsyncData(newSignal);
     } catch (_) {
       // Backend unavailable — profile will sync when backend is reachable
     }
@@ -194,10 +198,23 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
 // ── Step widgets ────────────────────────────────────────────
 
-class _StepCapital extends StatelessWidget {
+class _StepCapital extends StatefulWidget {
   final double value;
   final ValueChanged<double> onChanged;
   const _StepCapital({required this.value, required this.onChanged});
+
+  @override
+  State<_StepCapital> createState() => _StepCapitalState();
+}
+
+class _StepCapitalState extends State<_StepCapital> {
+  late double _local;
+
+  @override
+  void initState() {
+    super.initState();
+    _local = widget.value;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -208,18 +225,19 @@ class _StepCapital extends StatelessWidget {
       child: Column(
         children: [
           Text(
-            '\$${value.toStringAsFixed(0)}',
+            '\$${_local.toStringAsFixed(0)}',
             style: AppTypography.priceHero.copyWith(fontSize: 36),
           ),
           const SizedBox(height: 24),
           Slider(
-            value: value,
+            value: _local,
             min: 100,
             max: 5000,
             divisions: 49,
             activeColor: AppColors.primary,
             inactiveColor: AppColors.surface,
-            onChanged: onChanged,
+            onChanged: (v) => setState(() => _local = v),
+            onChangeEnd: widget.onChanged,
           ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -234,17 +252,30 @@ class _StepCapital extends StatelessWidget {
   }
 }
 
-class _StepMaxLoss extends StatelessWidget {
+class _StepMaxLoss extends StatefulWidget {
   final double value;
   final double capital;
   final ValueChanged<double> onChanged;
   const _StepMaxLoss({required this.value, required this.capital, required this.onChanged});
 
-  double get _minLoss => (capital * 0.005).clamp(10.0, 50.0);
+  @override
+  State<_StepMaxLoss> createState() => _StepMaxLossState();
+}
+
+class _StepMaxLossState extends State<_StepMaxLoss> {
+  late double _local;
+
+  double get _minLoss => (widget.capital * 0.005).clamp(10.0, 50.0);
+
+  @override
+  void initState() {
+    super.initState();
+    _local = widget.value;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final pct = (value / capital * 100).toStringAsFixed(1);
+    final pct = (_local / widget.capital * 100).toStringAsFixed(1);
     return _StepWrapper(
       icon: '🛡️',
       title: 'Max Loss Per Trade',
@@ -252,7 +283,7 @@ class _StepMaxLoss extends StatelessWidget {
       child: Column(
         children: [
           Text(
-            '\$${value.toStringAsFixed(0)}',
+            '\$${_local.toStringAsFixed(0)}',
             style: AppTypography.priceHero.copyWith(fontSize: 36, color: AppColors.loss),
           ),
           Text(
@@ -261,12 +292,13 @@ class _StepMaxLoss extends StatelessWidget {
           ),
           const SizedBox(height: 24),
           Slider(
-            value: value.clamp(_minLoss, capital * 0.5),
+            value: _local.clamp(_minLoss, widget.capital * 0.5),
             min: _minLoss,
-            max: capital * 0.5,
+            max: widget.capital * 0.5,
             activeColor: AppColors.loss,
             inactiveColor: AppColors.surface,
-            onChanged: onChanged,
+            onChanged: (v) => setState(() => _local = v),
+            onChangeEnd: widget.onChanged,
           ),
           Container(
             padding: const EdgeInsets.all(12),
@@ -276,10 +308,25 @@ class _StepMaxLoss extends StatelessWidget {
               border: Border.all(color: AppColors.primary.withOpacity(0.2)),
             ),
             child: Text(
-              '💡 Recommended: 2–5% of capital (\$${(capital * 0.02).toStringAsFixed(0)}–\$${(capital * 0.05).toStringAsFixed(0)})',
+              '💡 Recommended: 2–5% of capital (\$${(widget.capital * 0.02).toStringAsFixed(0)}–\$${(widget.capital * 0.05).toStringAsFixed(0)})',
               style: AppTypography.bodyRegular.copyWith(color: AppColors.primary, fontSize: 12),
             ),
           ),
+          if (_local < 50) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.warning.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+              ),
+              child: Text(
+                '⚠ \$${_local.toStringAsFixed(0)} 低于期权交易最低风险阈值（约 \$50）。系统可能无法推荐任何策略，将显示"观望"信号。',
+                style: AppTypography.bodyRegular.copyWith(color: AppColors.warning, fontSize: 12),
+              ),
+            ),
+          ],
         ],
       ),
     );

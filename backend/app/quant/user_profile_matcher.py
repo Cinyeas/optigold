@@ -43,7 +43,7 @@ _STRATEGY_REQUIREMENTS: dict[str, dict] = {
         "needs_margin": False,
         "needs_unlimited_risk": False,
         "needs_multi_leg": True,
-        "min_experience": "intermediate",
+        "min_experience": "beginner",   # defined risk makes this beginner-accessible
         "time_horizons": {"weekly", "monthly"},
     },
     "bear_call_spread": {
@@ -51,7 +51,7 @@ _STRATEGY_REQUIREMENTS: dict[str, dict] = {
         "needs_margin": False,
         "needs_unlimited_risk": False,
         "needs_multi_leg": True,
-        "min_experience": "intermediate",
+        "min_experience": "beginner",   # defined risk makes this beginner-accessible
         "time_horizons": {"weekly", "monthly"},
     },
     "iron_condor": {
@@ -75,7 +75,7 @@ _STRATEGY_REQUIREMENTS: dict[str, dict] = {
         "needs_margin": False,
         "needs_unlimited_risk": False,
         "needs_multi_leg": False,
-        "min_experience": "beginner",
+        "min_experience": "intermediate",  # OTM long options have low POP; not beginner-appropriate
         "time_horizons": {"weekly", "monthly", "quarterly"},
     },
     "long_put": {
@@ -83,7 +83,7 @@ _STRATEGY_REQUIREMENTS: dict[str, dict] = {
         "needs_margin": False,
         "needs_unlimited_risk": False,
         "needs_multi_leg": False,
-        "min_experience": "beginner",
+        "min_experience": "intermediate",  # OTM long options have low POP; not beginner-appropriate
         "time_horizons": {"weekly", "monthly", "quarterly"},
     },
     "long_straddle": {
@@ -91,7 +91,7 @@ _STRATEGY_REQUIREMENTS: dict[str, dict] = {
         "needs_margin": False,
         "needs_unlimited_risk": False,
         "needs_multi_leg": True,
-        "min_experience": "intermediate",
+        "min_experience": "advanced",   # 23% win rate for Intermediate; theta decay + IV crush make it advanced-only
         "time_horizons": {"weekly", "monthly"},
     },
     "short_straddle": {

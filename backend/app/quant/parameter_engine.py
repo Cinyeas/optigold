@@ -59,6 +59,7 @@ def generate_parameters(
     dte_target: int = 30,
     quantity: int = 1,
     delta_target_otm: float = 0.30,
+    spread_width: Optional[float] = None,
 ) -> StrategyParameters:
     """
     Build StrategyParameters using synthetic Black-Scholes chain.
@@ -66,6 +67,10 @@ def generate_parameters(
     Args:
         strategy:         Strategy name from filter (e.g. "iron_condor").
         spot:             Current GLD spot price.
+        spread_width:     Dollar width for vertical spread legs. When None,
+                          defaults to max(2.0, spot × 0.02). Pass a smaller
+                          value (e.g. 2.0) for low-capital profiles where
+                          max_loss must stay within tight risk limits.
         atm_iv:           ATM implied volatility (decimal, e.g. 0.18).
         r:                Risk-free rate.
         dte_target:       Target days to expiry.
@@ -81,6 +86,9 @@ def generate_parameters(
 
     # Use a slightly elevated IV for OTM strikes (simplified skew)
     iv_otm = atm_iv * 1.05
+
+    # Spread width in dollar terms for vertical spread legs
+    _spread_w = spread_width if spread_width is not None else max(2.0, spot * 0.02)
 
     params = StrategyParameters(
         strategy=strategy,
@@ -122,7 +130,7 @@ def generate_parameters(
 
     elif strategy == "bull_put_spread":
         short_strike = _find_strike_by_delta(spot, T, r, iv_otm, delta_target_otm, "put")
-        long_strike = _round_strike(short_strike - max(2.0, spot * 0.02))
+        long_strike = _round_strike(short_strike - _spread_w)
         short_prem = bs_price(spot, short_strike, T, r, iv_otm, "put")
         long_prem = bs_price(spot, long_strike, T, r, iv_otm, "put")
         net_credit = (short_prem - long_prem) * 100 * quantity
@@ -140,7 +148,7 @@ def generate_parameters(
 
     elif strategy == "bear_call_spread":
         short_strike = _find_strike_by_delta(spot, T, r, iv_otm, delta_target_otm, "call")
-        long_strike = _round_strike(short_strike + max(2.0, spot * 0.02))
+        long_strike = _round_strike(short_strike + _spread_w)
         short_prem = bs_price(spot, short_strike, T, r, iv_otm, "call")
         long_prem = bs_price(spot, long_strike, T, r, iv_otm, "call")
         net_credit = (short_prem - long_prem) * 100 * quantity
@@ -242,6 +250,30 @@ def generate_parameters(
         params.greeks = {
             k: bs_greeks(spot, strike, T, r, atm_iv, "call")[k]
             + bs_greeks(spot, strike, T, r, atm_iv, "put")[k]
+            for k in ("delta", "gamma", "theta", "vega", "rho")
+        }
+
+    elif strategy == "short_straddle":
+        # ATM short call + ATM short put — collect both premiums
+        strike = _round_strike(spot)
+        call_prem = bs_price(spot, strike, T, r, atm_iv, "call") * 100 * quantity
+        put_prem = bs_price(spot, strike, T, r, atm_iv, "put") * 100 * quantity
+        total_credit = call_prem + put_prem
+        greeks_call = bs_greeks(spot, strike, T, r, atm_iv, "call")
+        greeks_put = bs_greeks(spot, strike, T, r, atm_iv, "put")
+
+        params.strike_a = strike
+        params.strike_b = strike
+        params.option_type_a = "put"
+        params.option_type_b = "call"
+        params.premium_collected = round(total_credit, 2)
+        params.max_profit = round(total_credit, 2)
+        params.max_loss = round(total_credit * 3, 2)   # theoretical; requires margin
+        params.breakeven_a = round(strike - total_credit / (100 * quantity), 2)
+        params.breakeven_b = round(strike + total_credit / (100 * quantity), 2)
+        params.probability_of_profit = 40.0
+        params.greeks = {
+            k: greeks_call[k] + greeks_put[k]
             for k in ("delta", "gamma", "theta", "vega", "rho")
         }
 

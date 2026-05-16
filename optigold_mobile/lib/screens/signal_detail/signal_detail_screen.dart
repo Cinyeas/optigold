@@ -127,12 +127,18 @@ class _DetailBodyState extends ConsumerState<_DetailBody> {
                 const SizedBox(height: 12),
               ],
 
-              // Confirm trade button
-              _ConfirmButton(
-                signal: s,
-                confirming: _confirming,
-                onConfirm: () => _confirmTrade(context, s),
-              ).animate().fadeIn(delay: 300.ms),
+              // Confirm trade button — hide if already executed
+              Builder(builder: (ctx) {
+                final positions = ref.watch(positionsProvider).valueOrNull ?? [];
+                final executed = positions.any((p) => p.signalId == s.id);
+                return executed
+                    ? _ExecutedBadge()
+                    : _ConfirmButton(
+                        signal: s,
+                        confirming: _confirming,
+                        onConfirm: () => _confirmTrade(context, s),
+                      ).animate().fadeIn(delay: 300.ms);
+              }),
 
               const SizedBox(height: 40),
             ]),
@@ -226,22 +232,28 @@ class _DetailBodyState extends ConsumerState<_DetailBody> {
 
   Widget _buildScenarios(s) {
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _ScenarioCell(
           label: 'Bear 🐻',
-          desc: 'GLD drops >5%\nMax loss: ${Fmt.currency(s.maxLoss)}',
+          line1: 'GLD drops >5%',
+          line2: 'Loss: ${Fmt.currency(s.maxLoss)}',
           color: AppColors.loss,
         ),
         const SizedBox(width: 8),
         _ScenarioCell(
           label: 'Base 📊',
-          desc: 'GLD stays flat\nPartial profit',
+          line1: 'GLD stays flat',
+          line2: 'Partial profit',
           color: AppColors.primary,
         ),
         const SizedBox(width: 8),
         _ScenarioCell(
           label: 'Bull 🚀',
-          desc: 'GLD rallies\nMax profit: ${s.maxProfit != null && s.maxProfit! > 0 ? Fmt.currency(s.maxProfit) : "Unlimited"}',
+          line1: 'GLD rallies',
+          line2: s.maxProfit != null && s.maxProfit! > 0
+              ? 'Profit: ${Fmt.currency(s.maxProfit)}'
+              : 'Unlimited profit',
           color: AppColors.profit,
         ),
       ],
@@ -352,7 +364,7 @@ class _SectionCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(title, style: AppTypography.sectionLabel.copyWith(color: AppColors.textSecondary)),
-            const SizedBox(height: 14),
+            const SizedBox(height: 10),
             child,
           ],
         ),
@@ -375,59 +387,150 @@ class _GridMetrics extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      childAspectRatio: subtitle(items) ? 2.0 : 2.4,
-      crossAxisSpacing: 8,
-      mainAxisSpacing: 8,
-      children: items.map((m) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: AppColors.background,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.divider),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.center,
+    // Build rows of 2, content-height-based (no fixed childAspectRatio)
+    final rows = <Widget>[];
+    for (int i = 0; i < items.length; i += 2) {
+      rows.add(IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(m.label, style: AppTypography.metricLabel),
-            Text(m.value, style: AppTypography.metricValue.copyWith(color: m.color, fontSize: 15)),
-            if (m.subtitle != null)
-              Text(m.subtitle!, style: AppTypography.metricLabel.copyWith(fontSize: 10, color: AppColors.textSecondary)),
+            Expanded(child: _cell(items[i])),
+            const SizedBox(width: 8),
+            Expanded(child: i + 1 < items.length ? _cell(items[i + 1]) : const SizedBox()),
           ],
         ),
-      )).toList(),
+      ));
+      if (i + 2 < items.length) rows.add(const SizedBox(height: 8));
+    }
+    return Column(children: rows);
+  }
+
+  Widget _cell(_MetricItem m) => _MetricCell(item: m);
+}
+
+class _MetricCell extends StatelessWidget {
+  final _MetricItem item;
+  const _MetricCell({required this.item});
+
+  void _showDetail(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(item.label,
+            style: AppTypography.bodyMedium.copyWith(color: AppColors.textSecondary)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(item.value,
+                style: AppTypography.metricValue.copyWith(color: item.color, fontSize: 20)),
+            if (item.subtitle != null) ...[
+              const SizedBox(height: 10),
+              Text(item.subtitle!,
+                  style: AppTypography.bodyRegular.copyWith(height: 1.5)),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
     );
   }
 
-  static bool subtitle(List<_MetricItem> items) => items.any((m) => m.subtitle != null);
+  @override
+  Widget build(BuildContext context) {
+    final cell = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(item.label, style: AppTypography.metricLabel),
+          const SizedBox(height: 2),
+          Text(item.value,
+              style: AppTypography.metricValue.copyWith(color: item.color, fontSize: 15)),
+          if (item.subtitle != null) ...[
+            const SizedBox(height: 2),
+            Text(item.subtitle!,
+                style: AppTypography.metricLabel
+                    .copyWith(fontSize: 10, color: AppColors.textSecondary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
+          ],
+        ],
+      ),
+    );
+
+    if (item.subtitle == null) return cell;
+
+    return GestureDetector(
+      onTap: () => _showDetail(context),
+      child: cell,
+    );
+  }
 }
 
 class _ScenarioCell extends StatelessWidget {
   final String label;
-  final String desc;
+  final String line1;
+  final String line2;
   final Color color;
-  const _ScenarioCell({required this.label, required this.desc, required this.color});
+  const _ScenarioCell({required this.label, required this.line1, required this.line2, required this.color});
+
+  void _showDetail(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(label, style: AppTypography.bodyMedium.copyWith(color: color)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(line1, style: AppTypography.bodyRegular),
+            const SizedBox(height: 4),
+            Text(line2, style: AppTypography.bodyRegular),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) => Expanded(
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.06),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: color.withOpacity(0.2)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: AppTypography.chipLabel.copyWith(color: color)),
-              const SizedBox(height: 6),
-              Text(desc, style: AppTypography.metricLabel.copyWith(height: 1.5)),
-            ],
+        child: GestureDetector(
+          onTap: () => _showDetail(context),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: color.withOpacity(0.2)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: AppTypography.chipLabel.copyWith(color: color), maxLines: 1),
+                const SizedBox(height: 6),
+                Text(line1, style: AppTypography.metricLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(line2, style: AppTypography.metricLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
+              ],
+            ),
           ),
         ),
       );
@@ -518,6 +621,44 @@ class _GreeksSection extends StatelessWidget {
   final Map<String, dynamic> greeks;
   const _GreeksSection({required this.greeks});
 
+  Widget _buildGreeksGrid(Map<String, dynamic> g) {
+    final entries = g.entries.toList();
+    final rows = <Widget>[];
+    for (int i = 0; i < entries.length; i += 2) {
+      rows.add(IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: _greekCell(entries[i])),
+            const SizedBox(width: 8),
+            Expanded(child: i + 1 < entries.length ? _greekCell(entries[i + 1]) : const SizedBox()),
+          ],
+        ),
+      ));
+      if (i + 2 < entries.length) rows.add(const SizedBox(height: 8));
+    }
+    return Column(children: rows);
+  }
+
+  Widget _greekCell(MapEntry<String, dynamic> e) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    decoration: BoxDecoration(
+      color: AppColors.background,
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: AppColors.divider),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(e.key.toUpperCase(), style: AppTypography.metricLabel),
+        const SizedBox(height: 2),
+        Text((e.value as num).toStringAsFixed(4),
+            style: AppTypography.metricValue.copyWith(fontSize: 13)),
+      ],
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     return ExpansionTile(
@@ -535,37 +676,32 @@ class _GreeksSection extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            childAspectRatio: 2.4,
-            crossAxisSpacing: 8,
-            mainAxisSpacing: 8,
-            children: greeks.entries.map((e) => Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppColors.background,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.divider),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(e.key.toUpperCase(), style: AppTypography.metricLabel),
-                  Text(
-                    (e.value as num).toStringAsFixed(4),
-                    style: AppTypography.metricValue.copyWith(fontSize: 13),
-                  ),
-                ],
-              ),
-            )).toList(),
-          ),
+          child: _buildGreeksGrid(greeks),
         ),
       ],
     );
   }
+}
+
+class _ExecutedBadge extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(vertical: 16),
+    decoration: BoxDecoration(
+      color: AppColors.profit.withOpacity(0.08),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: AppColors.profit.withOpacity(0.3)),
+    ),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(Icons.check_circle_outline, color: AppColors.profit, size: 18),
+        const SizedBox(width: 8),
+        Text('已记录仓位 · 交易已执行',
+            style: AppTypography.bodyMedium.copyWith(color: AppColors.profit)),
+      ],
+    ),
+  );
 }
 
 class _ConfirmButton extends StatelessWidget {
